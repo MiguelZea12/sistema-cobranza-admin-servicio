@@ -1,6 +1,6 @@
 'use client';
 
-import { DollarSign, Search, Filter, Calendar, User, CreditCard, Image as ImageIcon, X, MapPin, FileText, Hash, Receipt, Printer, Pencil } from 'lucide-react';
+import { DollarSign, Search, Filter, Calendar, User, CreditCard, Image as ImageIcon, X, MapPin, FileText, Hash, Receipt, Printer, Pencil, Ban } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Cobro, Usuario } from '@/lib/types';
 import { imprimirTicketCobro } from '@/lib/utils/generarTicketCobro';
@@ -40,6 +40,7 @@ export default function CobrosPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedUsuario, setSelectedUsuario] = useState<string>('');
   const [selectedFormaPago, setSelectedFormaPago] = useState<string>('');
+  const [selectedEstado, setSelectedEstado] = useState<string>('');
   const [selectedSucursal, setSelectedSucursal] = useState<string>('');
   const [fechaInicio, setFechaInicio] = useState(getHoy());
   const [fechaFin, setFechaFin] = useState(getHoy());
@@ -68,6 +69,10 @@ export default function CobrosPage() {
   const [editTipoTarjeta, setEditTipoTarjeta] = useState('');
   
   const [savingFormaPago, setSavingFormaPago] = useState(false);
+
+  // Modal de confirmación para anular
+  const [modalAnularCobro, setModalAnularCobro] = useState<string | null>(null);
+  const [anulandoCobro, setAnulandoCobro] = useState(false);
   
   // Listas únicas
   const [usuarios, setUsuarios] = useState<string[]>([]);
@@ -80,7 +85,7 @@ export default function CobrosPage() {
 
   useEffect(() => {
     applyFilters();
-  }, [cobros, searchTerm, selectedUsuario, selectedFormaPago, selectedSucursal, fechaInicio, fechaFin]);
+  }, [cobros, searchTerm, selectedUsuario, selectedFormaPago, selectedSucursal, fechaInicio, fechaFin, selectedEstado]);
 
   const fetchUsuarios = async () => {
     try {
@@ -227,6 +232,40 @@ export default function CobrosPage() {
     }
   };
 
+  const handleAnularCobro = async (cobroId: string) => {
+    setModalAnularCobro(cobroId);
+  };
+
+  const confirmarAnularCobro = async () => {
+    if (!modalAnularCobro) return;
+
+    setAnulandoCobro(true);
+    try {
+      const res = await fetch('/api/cobros', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: modalAnularCobro,
+          anulado: true,
+        }),
+      });
+      if (!res.ok) throw new Error('Error al anular el cobro');
+      
+      setCobros(prev =>
+        prev.map(c =>
+          c.id === modalAnularCobro
+            ? { ...c, anulado: true, syncStatus: 'anulado' }
+            : c
+        )
+      );
+      setModalAnularCobro(null);
+    } catch (err: any) {
+      alert('Error anular el cobro: ' + err.message);
+    } finally {
+      setAnulandoCobro(false);
+    }
+  };
+
   const fetchCobros = async () => {
     try {
       setLoading(true);
@@ -285,6 +324,11 @@ export default function CobrosPage() {
       filtered = filtered.filter(c => c.formaPago === selectedFormaPago);
     }
 
+    // Filtro por estado
+    if (selectedEstado) {
+      filtered = filtered.filter(c => (c.syncStatus || 'pending') === selectedEstado);
+    }
+
     // Filtro por fecha inicio (desde las 00:00:00)
     if (fechaInicio) {
       const [year, month, day] = fechaInicio.split('-').map(Number);
@@ -324,6 +368,7 @@ export default function CobrosPage() {
     setSearchTerm('');
     setSelectedUsuario('');
     setSelectedFormaPago('');
+    setSelectedEstado('');
     setSelectedSucursal('');
     setFechaInicio(getHoy());
     setFechaFin(getHoy());
@@ -377,16 +422,17 @@ export default function CobrosPage() {
   };
 
   // Estadísticas
-  const totalCobros = filteredCobros.length;
-  const totalMonto = filteredCobros.reduce((sum, c) => sum + c.monto, 0);
-  const totalEfectivo = filteredCobros.filter(c => c.formaPago === 'efectivo').reduce((sum, c) => sum + c.monto, 0);
-  const totalTransferencias = filteredCobros.filter(c => c.formaPago === 'transferencia').reduce((sum, c) => sum + c.monto, 0);
+  const activeCobros = filteredCobros.filter(c => !c.anulado);
+  const totalCobros = activeCobros.length;
+  const totalMonto = activeCobros.reduce((sum, c) => sum + c.monto, 0);
+  const totalEfectivo = activeCobros.filter(c => c.formaPago === 'efectivo').reduce((sum, c) => sum + c.monto, 0);
+  const totalTransferencias = activeCobros.filter(c => c.formaPago === 'transferencia').reduce((sum, c) => sum + c.monto, 0);
 
   // Paginación
-  const totalPages = Math.ceil(filteredCobros.length / ITEMS_PER_PAGE);
+  const totalPages = Math.ceil(activeCobros.length / ITEMS_PER_PAGE);
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
-  const currentCobros = filteredCobros.slice(startIndex, endIndex);
+  const currentCobros = activeCobros.slice(startIndex, endIndex);
 
   return (
     <div className="space-y-6">
@@ -503,6 +549,25 @@ export default function CobrosPage() {
             </div>
           </div>
 
+          {/* Estado */}
+          <div className="relative">
+            <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none z-10" />
+            <select
+              value={selectedEstado}
+              onChange={(e) => setSelectedEstado(e.target.value)}
+              className="w-full pl-10 pr-8 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent appearance-none bg-white truncate"
+            >
+              <option value="">Todos los estados</option>
+              <option value="synced">Sincronizado</option>
+              <option value="pending">Pendiente</option>
+              <option value="error">Error</option>
+              <option value="anulado">Anulado</option>
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-400">
+              <svg className="h-4 w-4 fill-current" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" /></svg>
+            </div>
+          </div>
+
           {/* Sucursal */}
           <div className="relative">
             <MapPin className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none z-10" />
@@ -571,7 +636,7 @@ export default function CobrosPage() {
         <div className="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
           <p className="text-red-600">Error: {error}</p>
         </div>
-      ) : filteredCobros.length === 0 ? (
+      ) : activeCobros.length === 0 ? (
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-12 text-center">
           <DollarSign className="h-16 w-16 text-gray-400 mx-auto mb-4" />
           <p className="text-gray-600 text-lg">No se encontraron cobros</p>
@@ -594,13 +659,15 @@ export default function CobrosPage() {
                     </div>
                     {cobro.syncStatus && (
                       <span className={`text-xs font-medium px-2 py-1 rounded-full whitespace-nowrap ${
-                        cobro.syncStatus === 'synced' 
-                          ? 'bg-green-100 text-green-700' 
+                        cobro.syncStatus === 'synced'
+                          ? 'bg-green-100 text-green-700'
                           : cobro.syncStatus === 'pending'
                           ? 'bg-yellow-100 text-yellow-700'
+                          : cobro.syncStatus === 'anulado'
+                          ? 'bg-gray-100 text-gray-700'
                           : 'bg-red-100 text-red-700'
                       }`}>
-                        {cobro.syncStatus === 'synced' ? 'Sincronizado' : cobro.syncStatus === 'pending' ? 'Pendiente' : 'Error'}
+                        {cobro.syncStatus === 'synced' ? 'Sincronizado' : cobro.syncStatus === 'pending' ? 'Pendiente' : cobro.syncStatus === 'anulado' ? 'Anulado' : 'Error'}
                       </span>
                     )}
                   </div>
@@ -766,7 +833,7 @@ export default function CobrosPage() {
                   )}
 
                   {/* Botón de imprimir ticket */}
-                  <div className="pt-4 border-t border-gray-200">
+                  <div className="pt-4 border-t border-gray-200 space-y-2">
                     <button
                       onClick={async () => {
                         const id = cobro.id || cobro.numeroComprobante || '';
@@ -795,6 +862,21 @@ export default function CobrosPage() {
                         </>
                       )}
                     </button>
+
+                    {!cobro.anulado ? (
+                      <button
+                        onClick={() => handleAnularCobro(cobro.id!)}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2 mt-2 bg-red-100 text-red-700 hover:bg-red-200 text-sm font-medium rounded-lg transition-colors"
+                      >
+                        <Ban className="h-4 w-4" />
+                        Anular Cobro
+                      </button>
+                    ) : (
+                      <div className="w-full flex items-center justify-center gap-2 px-4 py-2 mt-2 bg-gray-100 text-gray-500 text-sm font-medium rounded-lg">
+                        <Ban className="h-4 w-4" />
+                        Cobro Anulado
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -805,7 +887,7 @@ export default function CobrosPage() {
           {totalPages > 1 && (
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-4 mt-6 sm:mt-8">
               <div className="text-xs sm:text-sm text-gray-600 order-2 sm:order-1">
-                Mostrando {startIndex + 1}-{Math.min(endIndex, filteredCobros.length)} de {filteredCobros.length}
+                Mostrando {startIndex + 1}-{Math.min(endIndex, activeCobros.length)} de {activeCobros.length}
               </div>
               
               <div className="flex items-center gap-2 order-1 sm:order-2">
@@ -1042,6 +1124,49 @@ export default function CobrosPage() {
           </div>
         </div>
       )}
+
+      {/* Modal Confirmar Anular Cobro */}
+      {modalAnularCobro && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+                <Ban className="h-6 w-6 text-red-600" />
+              </div>
+              <h2 className="text-lg font-semibold text-gray-900">Confirmar Anulación</h2>
+            </div>
+            <p className="text-sm text-gray-600 mb-6">
+              ¿Está seguro de que desea anular este cobro? Esta acción no se puede deshacer y evitará que el cobro se sincronice.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setModalAnularCobro(null)}
+                disabled={anulandoCobro}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmarAnularCobro}
+                disabled={anulandoCobro}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:bg-red-400 disabled:cursor-not-allowed rounded-lg transition-colors"
+              >
+                {anulandoCobro ? 'Anulando...' : 'Sí, Anular'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
